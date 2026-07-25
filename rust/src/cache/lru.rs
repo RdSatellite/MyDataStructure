@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{self, AtomicUsize};
 
 type Index = usize;
 
@@ -15,12 +14,9 @@ struct Node<K, V> {
     next: Option<Index>,
 }
 
-pub struct Lru<K, V> 
-where 
-    K: Eq + Hash,
-{
+pub struct Lru<K, V> {
     capacity: usize,
-    len: AtomicUsize,
+    len: usize,
 
     head: Option<Index>,
     tail: Option<Index>,
@@ -40,7 +36,7 @@ where
 
         return Self {
             capacity,
-            len: AtomicUsize::new(0),
+            len: 0,
             head: None,
             tail: None,
             map: HashMap::with_capacity(capacity),
@@ -50,14 +46,17 @@ where
         }
     }
 
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
-        self.len.load(atomic::Ordering::Relaxed)
+        self.len
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -74,36 +73,33 @@ where
             if let Some(tail_idx) = self.tail {
                 self.detach(tail_idx);
 
-                let evicted_key = &self.arena[tail_idx].key;
-                self.map.remove(evicted_key);
+                let evicted_key = self.arena[tail_idx].key.clone();
+                self.map.remove(&evicted_key);
 
                 self.free.push(tail_idx);
-                self.len.fetch_sub(1, atomic::Ordering::Relaxed);
+                self.len -= 1;
             }
         }
 
-        if let Some(idx) = self.free.pop() {
-            self.arena[idx] = Node {
-                key: key.clone(),
-                value,
-                prev: None,
-                next: None,
-            };
-            self.map.insert(key, idx);
-            self.insert_head(idx);
+        let node = Node {
+            key: key.clone(),
+            value,
+            prev: None,
+            next: None,
+        };
+
+        let idx = if let Some(idx) = self.free.pop() {
+            self.arena[idx] = node;
+            idx
         } else {
             let idx = self.arena.len();
-            self.arena.push(Node {
-                key: key.clone(),
-                value,
-                prev: None,
-                next: None,
-            });
-            self.map.insert(key, idx);
-            self.insert_head(idx);
-        }
+            self.arena.push(node);
+            idx
+        };
 
-        self.len.fetch_add(1, atomic::Ordering::Relaxed);
+        self.map.insert(key, idx);
+        self.insert_head(idx);
+        self.len += 1;
     }
 
     pub fn get(&mut self, key: &K) -> Option<&V> {
@@ -141,8 +137,5 @@ where
             Some(n) => self.arena[n].prev = prev,
             None => self.tail = prev,
         }
-
-        self.arena[idx].prev = None;
-        self.arena[idx].next = None;
     }
 }
